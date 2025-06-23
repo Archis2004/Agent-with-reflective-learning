@@ -1,9 +1,6 @@
 streamlit
-langchain
-google-generativeai
-sentence-transformers
-faiss-cpu
-pypdf
+PyPDF2
 python-docx
-unstructured
-pytesseract
+Pillow
+google-generativeai
+google-ai-generativelanguage
