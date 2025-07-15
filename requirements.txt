@@ -10,3 +10,5 @@ docx2txt
 tqdm
 langchain
 langchain-google-genai
+langchain-community
+langchain-core

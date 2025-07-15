@@ -2,9 +2,9 @@ import os
 import tempfile
 from typing import List, Optional
 
-from langchain.schema import Document
+from langchain_core.documents import Document
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.document_loaders import PyPDFLoader, Docx2txtLoader
+from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader
 from langchain.llms.base import LLM
 import google.generativeai as genai
 import google.ai.generativelanguage as glm
