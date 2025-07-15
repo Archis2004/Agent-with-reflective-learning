@@ -4,3 +4,7 @@ python-docx
 Pillow
 google-generativeai
 google-ai-generativelanguage
+pydantic
+faiss-cpu
+docx2txt
+tqdm
