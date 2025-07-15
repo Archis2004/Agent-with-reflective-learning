@@ -3,6 +3,7 @@ PyPDF2
 python-docx
 Pillow
 google-generativeai
+google-genai
 google-ai-generativelanguage
 pydantic
 faiss-cpu

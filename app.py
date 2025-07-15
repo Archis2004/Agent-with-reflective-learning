@@ -1,112 +1,123 @@
+# app.py
+import io
 import streamlit as st
-from chatbot import prepare_text_docs, GeminiChat
+from PIL import Image
+
+from chatbot import prepare_text_docs
 from langchain_google_genai.embeddings import GoogleGenerativeAIEmbeddings
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.vectorstores import FAISS
 from langchain.chains import RetrievalQA
+
 import google.generativeai as genai
-from PIL import Image
 
 st.set_page_config(page_title="Multimodal Chatbot", layout="wide")
 st.title("Multimodal Chatbot (PDF/DOCX RAG & Image Chat)")
 st.caption("Upload a text file for RAG or an image for direct Q&A")
 
+# ─── Configure Google Generative AI ──────────────────────────────────────────
 try:
     gemini_key = st.secrets["GOOGLE_API_KEY"]
     genai.configure(api_key=gemini_key)
-except (KeyError, FileNotFoundError):
-    st.error("GOOGLE_API_KEY not found in .streamlit/secrets.toml")
+except Exception:
+    st.error("Could not find GOOGLE_API_KEY in .streamlit/secrets.toml")
     st.stop()
 
+# ─── Sidebar: model choice & upload ───────────────────────────────────────────
 with st.sidebar:
     st.header("Upload & Configuration")
-    
     chat_model_name = st.selectbox(
-        "Choose your Gemini model:",
-        [
-            "gemini-1.5-flash-latest", 
-            "gemini-1.5-pro-latest",   
-        ]
+        "Gemini Model",
+        ["gemini-1.5-flash-latest", "gemini-1.5-pro-latest"]
     )
-    
     uploaded_file = st.file_uploader(
-        "Upload PDF, DOCX, PNG, JPG or JPEG",
+        "PDF, DOCX, PNG, JPG or JPEG",
         type=["pdf", "docx", "png", "jpg", "jpeg"]
     )
 
+# ─── Session state defaults ──────────────────────────────────────────────────
 if "history" not in st.session_state:
     st.session_state.history = []
 if "rag_chain" not in st.session_state:
     st.session_state.rag_chain = None
-if "image_for_chat" not in st.session_state:
-    st.session_state.image_for_chat = None
+if "image_ref" not in st.session_state:
+    st.session_state.image_ref = None
 
+# ─── Handle file upload ──────────────────────────────────────────────────────
 if uploaded_file:
-    file_ext = uploaded_file.name.lower().split(".")[-1]
-    
-    if file_ext in ["pdf", "docx"]:
-        st.session_state.image_for_chat = None
-        
-        st.sidebar.info(f"Processing '{uploaded_file.name}' for RAG...")
+    ext = uploaded_file.name.lower().rsplit(".", 1)[-1]
+
+    if ext in ("pdf", "docx"):
+        # prepare RAG chain
         docs = prepare_text_docs(uploaded_file)
-        if docs:
-            emb = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=gemini_key)
-            vectorstore = FAISS.from_documents(docs, emb)
-            llm = GeminiChat(api_key=gemini_key, model_name=chat_model_name)
-            rag_chain = RetrievalQA.from_chain_type(
+        if not docs:
+            st.sidebar.error("Failed to parse document.")
+            st.session_state.rag_chain = None
+        else:
+            emb = GoogleGenerativeAIEmbeddings(
+                model="models/embedding-001", google_api_key=gemini_key
+            )
+            vs = FAISS.from_documents(docs, emb)
+            llm = ChatGoogleGenerativeAI(
+                model=chat_model_name,
+                api_key=gemini_key
+            )
+            st.session_state.rag_chain = RetrievalQA.from_chain_type(
                 llm=llm,
                 chain_type="stuff",
-                retriever=vectorstore.as_retriever(search_kwargs={"k": 3})
+                retriever=vs.as_retriever(search_kwargs={"k": 3})
             )
-            st.session_state.rag_chain = rag_chain
-            st.sidebar.success("Text document processed for RAG!")
-        else:
-            st.sidebar.error("Failed to process the text document.")
-            st.session_state.rag_chain = None
+            st.sidebar.success("Document ready for RAG!")
+        st.session_state.image_ref = None
 
-    elif file_ext in ["png", "jpg", "jpeg"]:
+    else:
+        # prepare image for multimodal Q&A
+        img = Image.open(uploaded_file).convert("RGB")
+        st.sidebar.image(img, caption="Loaded image")
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG")
+        buf.seek(0)
+
+        # upload into Gemini
+        image_ref = genai.upload_image(buf.read())
+        st.session_state.image_ref = image_ref
         st.session_state.rag_chain = None
-        
-        st.sidebar.info(f"Processing '{uploaded_file.name}' for chat...")
-        image = Image.open(uploaded_file)
-        st.session_state.image_for_chat = image
-        st.sidebar.image(image, caption="Ready to chat about this image.")
-        st.sidebar.success("Image loaded!")
+        st.sidebar.success("Image ready for Q&A!")
 
 else:
     st.session_state.rag_chain = None
-    st.session_state.image_for_chat = None
+    st.session_state.image_ref = None
 
-for role, text in st.session_state.history:
-    st.chat_message(role).markdown(text)
+# ─── Render chat history ─────────────────────────────────────────────────────
+for role, msg in st.session_state.history:
+    st.chat_message(role).markdown(msg)
 
+# ─── Handle new user question ────────────────────────────────────────────────
 if user_q := st.chat_input("Ask a question..."):
     st.session_state.history.append(("user", user_q))
     st.chat_message("user").markdown(user_q)
 
     with st.chat_message("assistant"), st.spinner("Thinking..."):
-        model = genai.GenerativeModel(chat_model_name)
-        answer = ""
-
-        if st.session_state.rag_chain:
-            try:
+        try:
+            # 1) RAG over text
+            if st.session_state.rag_chain:
                 answer = st.session_state.rag_chain.run(user_q)
-            except Exception as e:
-                answer = f"Error with RAG chain: {e}"
-        
-        elif st.session_state.image_for_chat:
-            try:
-                response = model.generate_content([user_q, st.session_state.image_for_chat])
-                answer = response.text
-            except Exception as e:
-                answer = f"Error generating content from image: {e}"
 
-        else:
-            try:
-                response = model.generate_content(user_q)
-                answer = response.text
-            except Exception as e:
-                answer = f"Error during generation: {e}"
-        
+            # 2) Multimodal: image + text
+            elif st.session_state.image_ref:
+                resp = genai.GenerativeModel(chat_model_name).generate_content([
+                    st.session_state.image_ref,
+                    user_q
+                ])
+                answer = resp.text
+
+            # 3) Plain chat
+            else:
+                resp = genai.GenerativeModel(chat_model_name).generate_content(user_q)
+                answer = resp.text
+
+        except Exception as e:
+            answer = f"Error: {e}"
+
         st.markdown(answer)
-
-    st.session_state.history.append(("assistant", answer))
+        st.session_state.history.append(("assistant", answer))
