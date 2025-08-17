@@ -9,7 +9,7 @@ from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader
 
 def prepare_text_docs(uploaded_file) -> Optional[List[Document]]:
     """
-    Load a PDF or DOCX, split into 1,000‑char chunks with 200‑char overlap.
+    Load a PDF or DOCX, split into 1,000-char chunks with 200-char overlap.
     """
     if not uploaded_file:
         return None
@@ -18,13 +18,17 @@ def prepare_text_docs(uploaded_file) -> Optional[List[Document]]:
     if ext not in ("pdf", "docx"):
         return None
 
-    data = uploaded_file.read()
+    data = uploaded_file.getvalue()
     with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp:
         tmp.write(data)
         tmp_path = tmp.name
 
     try:
-        loader = PyPDFLoader(tmp_path) if ext == "pdf" else Docx2txtLoader(tmp_path)
+        if ext == "pdf":
+            loader = PyPDFLoader(tmp_path)
+        else:
+            loader = Docx2txtLoader(tmp_path)
+
         docs = loader.load()
         if not docs:
             return None
