@@ -1,3 +1,4 @@
+# app.py
 import io
 import os
 import sys
@@ -38,7 +39,7 @@ except Exception as e:
 
 
 def run_python_code(code: str) -> str:
-    """Executes Python code and returns the output."""
+    """Executes Python code in a sandboxed environment and returns the output."""
     old_stdout = sys.stdout
     sys.stdout = captured_output = io.StringIO()
     try:
@@ -50,12 +51,8 @@ def run_python_code(code: str) -> str:
     finally:
         sys.stdout = old_stdout
 
-
 def process_tool_output(question: str, tool_name: str, tool_output: str, model_name: str, generated_code: str = ""):
-    """
-    Uses the Gemini model to synthesize a final answer from raw tool output.
-    If the user asks for the code, it returns the generated code instead.
-    """
+    """Uses the Gemini model to synthesize a final answer from raw tool output."""
     model = genai.GenerativeModel(model_name)
     
     if tool_name == "Python Code Runner" and generated_code and ("code" in question.lower() or "script" in question.lower()):
@@ -79,10 +76,44 @@ Based on the tool's successful output, what is the final answer to the user's qu
     except Exception as e:
         return f"An error occurred while processing the tool's output: {e}"
 
-
 def clean_generated_code(code: str) -> str:
-    """Removes markdown backticks and 'python' language identifier."""
+    """Removes markdown backticks and 'python' language identifier from code blocks."""
     return re.sub(r'^```python\s*|\s*```$', '', code, flags=re.MULTILINE).strip()
+
+
+def reflect_and_verify_answer(question: str, initial_answer: str, model_name: str) -> str:
+    """
+    Performs a self-reflection step to check the consistency and accuracy of an answer.
+    It critiques the initial answer and corrects it if necessary.
+    """
+    model = genai.GenerativeModel(model_name)
+
+    reflection_prompt = f"""You are a meticulous AI assistant acting as a quality checker.
+Your task is to review a generated answer based on the user's original question.
+
+Original User Question:
+"{question}"
+
+Generated Answer to Review:
+"{initial_answer}"
+
+Please perform the following checks:
+1.  **Directness:** Does the answer directly address the user's question?
+2.  **Accuracy:** Does the answer seem factually correct and logical? Are there any potential hallucinations?
+3.  **Completeness:** Is the answer complete, or is it missing crucial information implied by the question?
+
+Instructions:
+- If the generated answer is accurate, complete, and directly answers the question, simply return the **exact original answer** without any changes or extra text.
+- If the answer is flawed (e.g., inaccurate, incomplete, or not addressing the question), provide a corrected and improved version.
+
+Your final output should ONLY be the answer itself.
+"""
+    try:
+        response = model.generate_content(reflection_prompt)
+        return response.text
+    except Exception as e:
+        print(f"Error during reflection: {e}")
+        return initial_answer
 
 
 with st.sidebar:
@@ -102,7 +133,6 @@ tavily_tool_instance = TavilySearchResults(max_results=3)
 wikipedia_tool_instance = WikipediaQueryRun(api_wrapper=WikipediaAPIWrapper())
 python_tool_instance = Tool(name="PythonCodeRunner", func=run_python_code, description="A Python code interpreter.")
 tools = [tavily_tool_instance, wikipedia_tool_instance, python_tool_instance]
-
 
 def initialize_agent():
     llm = ChatGoogleGenerativeAI(model=chat_model_name, api_key=gemini_key, convert_system_message_to_human=True)
@@ -158,15 +188,16 @@ with col4: st.button("Python Runner", on_click=set_tool_mode, args=('python_runn
 for role, msg in st.session_state.history:
     st.chat_message(role).markdown(msg)
 
-
 placeholder_prompts = {'auto': "Ask a question and let the AI decide...", 'web_search': "Enter a query for Web Search...", 'wikipedia': "Enter a topic for Wikipedia...", 'python_runner': "Describe a task for the AI to code and run..."}
 if is_file_loaded:
     placeholder = "Ask a question about the loaded file..."
 else:
     placeholder = placeholder_prompts.get(st.session_state.selected_tool, "Ask a question...")
+
 if user_q := st.chat_input(placeholder):
     st.session_state.history.append(("user", user_q))
     st.chat_message("user").markdown(user_q)
+
     with st.chat_message("assistant"), st.spinner("Thinking..."):
         try:
             answer = ""
@@ -194,10 +225,8 @@ if user_q := st.chat_input(placeholder):
                         response = model.generate_content(debug_prompt)
                         corrected_code = clean_generated_code(response.text)
                         final_code_to_run = corrected_code
-                        
                         tool_output = python_tool_instance.invoke(corrected_code)
                     
-
                     answer = process_tool_output(user_q, "Python Code Runner", tool_output, chat_model_name, generated_code=final_code_to_run)
 
                 elif tool_mode == 'web_search':
@@ -216,5 +245,12 @@ if user_q := st.chat_input(placeholder):
                         answer = response.text
         except Exception as e:
             answer = f"An unexpected error occurred: {e}"
-        st.markdown(str(answer))
-        st.session_state.history.append(("assistant", str(answer)))
+
+        if answer and not answer.startswith("An unexpected error occurred"):
+            with st.spinner("Performing consistency check..."):
+                final_answer = reflect_and_verify_answer(user_q, answer, chat_model_name)
+        else:
+            final_answer = answer
+
+        st.markdown(str(final_answer))
+        st.session_state.history.append(("assistant", str(final_answer)))
